@@ -1,0 +1,459 @@
+---
+title: "EXN NAM Backlog"
+format: 
+  dashboard:
+    nav-buttons: [linkedin]
+logo: "images/picture3.png"
+theme: 
+  light: [flatly]
+  dark: [sandstone-dark]
+fig-width: 10
+fig-asp: 0.3
+editor_options:
+  chunk_output_type: console
+project:
+  type: website
+  output-dir: docs
+---
+
+```{r setup}
+# Loading in libraries and dataset
+
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+library(broom)
+library(bizdays)
+library(scales)
+library(wesanderson)
+
+
+backlog <- read_excel("./data/UnbilledBookedLinesLastMonth.xlsx")
+```
+
+
+```{r}
+# Mutating attributes for analysis (as factors) and select only necessary fields
+
+backlog <- backlog |>
+  mutate(sales_rep = as.factor(`Sales Rep`),
+         status = as.factor(`Status`),
+         us_order_status = as.factor(`US Order Status`),
+         quantity = as.numeric(Quantity),
+         unbilled_quantity = as.numeric(`Unbilled Quantity`),
+         vendor = as.factor(Vendor),
+         terms = as.factor(Terms),
+         group_family = as.factor(`Group Family Name`)
+         ) |>
+  select(`Document Number`, sales_rep, status, us_order_status,
+         Date, Reseller, `End User`, `Vendor Expiry`, Item, quantity,
+         unbilled_quantity, Price, `Unbilled Amount`, Margin, vendor,
+         terms, group_family)
+
+# na_count_per_column <- backlog %>%
+#   summarise_all(~ sum(is.na(.)))
+# 
+# # Display the count of NA values per column
+# na_count_per_column
+
+# Remove the last observation (a grand total row)
+backlog <- 
+  backlog |> 
+  slice(-n())
+
+```
+
+```{r}
+# Creating age variable that calculates number of business days since order date
+
+# Create a calendar that excludes Saturdays and Sundays
+create.calendar(name = "weekdays", weekdays = c("saturday", "sunday"))
+
+# retrieving current date
+backlog <- backlog |> 
+  mutate(current_date = Sys.Date(),
+         age_bizdays = bizdays(Date, current_date, "weekdays"))
+
+```
+
+```{r}
+# Code for data in top 3 cards
+
+# Number of orders in Backlog
+n_orders <- backlog |> 
+  group_by(`Document Number`) |> 
+  summarise(count = n()) |> 
+  nrow()
+
+# Total Unbilled Amount in Backlog
+total_unbilled <- sum(backlog$`Unbilled Amount`)
+
+# Average Age in Business Days 
+avg_age <- mean(backlog$age_bizdays)
+
+```
+
+# July
+
+## Row {height="20%"}
+
+```{r}
+#| content: valuebox
+#| title: "Total Sales Orders"
+
+list(
+  color = "secondary",
+  value = n_orders
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Total Unbilled Amount"
+
+list(
+  color = "primary",
+  value = dollar(total_unbilled)
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Average Age"
+
+list(
+  color = "info",
+  value = round(avg_age, 2)
+)
+```
+
+## Row {height="40%"}
+
+### Column {width="40%"}
+
+```{r}
+#| title: "Backlog SOs by Dollar Amount"
+#| padding: 3px
+
+
+# backlog |> 
+#   group_by(`Document Number`) |> 
+#   summarise(total_unbilled = sum(`Unbilled Amount`),
+#             age = max(age_bizdays)) |> 
+#   slice_max(order_by = total_unbilled, n = 20) |> 
+#   kable(format = "html", caption = "Backlog by SO & Dollar Value") |>
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+backlog |> 
+  group_by(`Document Number`, us_order_status) |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`),
+            age = max(age_bizdays)) |> 
+  arrange(desc(total_unbilled)) |> 
+  mutate(total_unbilled = scales::dollar(total_unbilled)) |>  # Format the total_unbilled column
+  kable(format = "html", 
+                col.names = c("Order Number", 
+                              "Order Status", 
+                              "Total Unbilled Amount", 
+                              "Age (Business Days)"),
+        caption = "Backlog by SO & Dollar Value") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) 
+
+
+
+
+```
+
+### Column {width="60%"}
+
+```{r, fig.height = 8, fig.width = 8}
+#| title: "Vendor Breakdown"
+#| padding: 0px
+
+
+backlog |> 
+  group_by(vendor) |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`, na.rm = TRUE)) |> 
+  mutate(vendor = fct_reorder(vendor, total_unbilled)) |> 
+  arrange(desc(total_unbilled)) |> 
+  ggplot(aes(x = vendor, y = total_unbilled)) +
+  geom_bar(stat = "identity", position = "dodge", fill = "seagreen") + 
+  geom_text(aes(label = ifelse(total_unbilled > 400000, 
+                               scales::label_dollar()(total_unbilled), 
+                               "")),
+            hjust = 1.1, 
+            size = 2.5, 
+            color = "white", 
+            fontface = "bold") +
+  labs(
+       x = "",
+       y = "") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 8),
+        axis.text.y = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8)) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::label_dollar())  # Format y-axis as dollar amounts
+
+
+
+
+```
+
+
+## Row {height = "40%"}
+
+### Column {.tabset}
+
+```{r, fig.height = 8, fig.width = 16}
+#| title: Juniper 
+#| padding: 0px
+
+
+# juniper_data <- backlog |> 
+#   filter(vendor == "Juniper Networks (US), Inc.") |> 
+#   group_by(vendor, group_family) |> 
+#   summarise(count = n()) |> 
+#   mutate(percentage = count / sum(count) * 100) |> 
+#   arrange(desc(percentage))
+
+juniper_data <- backlog |> 
+  filter(vendor == "Juniper Networks (US), Inc.") |> 
+  group_by(vendor, group_family) |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`, na.rm = TRUE)) |> 
+  arrange(desc(total_unbilled))
+
+# juniper_plot <- ggplot(juniper_data, aes(x = reorder(group_family, -percentage), y = percentage, fill = group_family)) +
+#   geom_bar(stat = "identity", position = "dodge") +
+#   labs(title = "Juniper Networks (US), Inc.",
+#        x = "Grouping Family",
+#        y = "Percentage of Backlog",
+#        fill = "Grouping Family") +
+#   scale_fill_brewer(palette = "Dark2") +
+#   theme_bw() +
+#   theme(plot.title = element_text(face = "bold", size = 20),
+#         axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+#         axis.text.y = element_text(size = 14),  
+#         axis.title.x = element_text(size = 16),  
+#         axis.title.y = element_text(size = 16),
+#         legend.text = element_text(size = 14),
+#         legend.title = element_text(size = 16))
+
+juniper_plot <- ggplot(juniper_data, aes(x = reorder(group_family, -total_unbilled), y = total_unbilled, fill = group_family)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = scales::label_dollar()(total_unbilled)), 
+            vjust = 1.75, 
+            hjust = 0.5, 
+            size = 5, 
+            color = "white", 
+            fontface = "bold") +
+  labs(title = "Juniper - Total Unbilled By Product Type",
+       x = "",
+       y = "",
+       fill = "") +
+  scale_fill_brewer(palette = "Dark2") +
+  scale_y_continuous(labels = label_dollar()) +  
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+        axis.text.y = element_text(size = 14),  
+        axis.title.x = element_text(size = 16),  
+        axis.title.y = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+juniper_plot
+
+```
+
+```{r, fig.height = 8, fig.width = 16}
+#| title: Fortinet
+#| padding: 0px
+
+
+
+# fortinet_data <- backlog |> 
+#   filter(vendor == "Fortinet") |> 
+#   group_by(vendor, group_family) |> 
+#   summarise(count = n()) |> 
+#   mutate(percentage = count / sum(count) * 100) |> 
+#   arrange(desc(percentage))
+
+fortinet_data <- backlog |> 
+  filter(vendor == "Fortinet") |> 
+  group_by(vendor, group_family) |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`, na.rm = TRUE)) |> 
+  arrange(desc(total_unbilled))
+
+# fortinet_plot <- ggplot(fortinet_data, aes(x = reorder(group_family, -percentage), y = percentage, fill = group_family)) +
+#   geom_bar(stat = "identity", position = "dodge") +
+#   labs(title = "Fortinet",
+#        x = "Grouping Family",
+#        y = "Percentage of Backlog",
+#        fill = "Grouping Family") +
+#   scale_fill_brewer(palette = "Dark2") +
+#   theme_bw() +
+#   theme(plot.title = element_text(face = "bold", size = 20),
+#         axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+#         axis.text.y = element_text(size = 14),  
+#         axis.title.x = element_text(size = 16),  
+#         axis.title.y = element_text(size = 16),
+#         legend.text = element_text(size = 14),
+#         legend.title = element_text(size = 16))
+
+fortinet_plot <- ggplot(fortinet_data, aes(x = reorder(group_family, -total_unbilled), y = total_unbilled, fill = group_family)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(data = fortinet_data |> filter(total_unbilled > 250000), 
+          aes(label = scales::label_dollar()(total_unbilled)), 
+          vjust = 1.5, 
+          hjust = 0.5, 
+          size = 5, 
+          color = "white", 
+          fontface = "bold") +
+  labs(title = "Fortinet - Total Unbilled By Product Type",
+       x = "",
+       y = "",
+       fill = "") +
+  scale_fill_brewer(palette = "Dark2") +
+  # scale_fill_manual(values = wes_palette("Moonrise3")) +
+  scale_y_continuous(labels = label_dollar()) +  # Format y-axis as dollar amounts
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+        axis.text.y = element_text(size = 14),  
+        axis.title.x = element_text(size = 16),  
+        axis.title.y = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+fortinet_plot
+
+```
+
+
+
+```{r, fig.height = 8, fig.width = 16}
+#| title: Ruckus
+#| padding: 0px
+
+
+# ruckus_data <- backlog |> 
+#   filter(vendor == "Ruckus Wireless LLC") |> 
+#   group_by(vendor, group_family) |> 
+#   summarise(count = n()) |> 
+#   mutate(percentage = count / sum(count) * 100) |> 
+#   arrange(desc(percentage))
+
+ruckus_data <- backlog |> 
+  filter(vendor == "Ruckus Wireless LLC") |> 
+  group_by(vendor, group_family) |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`, na.rm = TRUE)) |> 
+  arrange(desc(total_unbilled))
+
+
+# ruckus_plot <- ggplot(ruckus_data, aes(x = reorder(group_family, -percentage), y = percentage, fill = group_family)) +
+#   geom_bar(stat = "identity", position = "dodge") +
+#   labs(title = "Ruckus Wireless LLC",
+#        x = "Grouping Family",
+#        y = "Percentage of Backlog",
+#        fill = "Grouping Family") +
+#   scale_fill_brewer(palette = "Dark2") +
+#   theme_bw() +
+#   theme(plot.title = element_text(face = "bold", size = 20),
+#         axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+#         axis.text.y = element_text(size = 14),  
+#         axis.title.x = element_text(size = 16),  
+#         axis.title.y = element_text(size = 16),
+#         legend.text = element_text(size = 14),
+#         legend.title = element_text(size = 16))
+
+ruckus_plot <- ggplot(ruckus_data, aes(x = reorder(group_family, -total_unbilled), y = total_unbilled, fill = group_family)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(data = ruckus_data |> filter(total_unbilled > 25000), 
+          aes(label = scales::label_dollar()(total_unbilled)), 
+          vjust = 1.5, 
+          hjust = 0.5, 
+          size = 5, 
+          color = "white", 
+          fontface = "bold") +
+  labs(title = "Ruckus - Total Unbilled By Product Type",
+       x = "",
+       y = "",
+       fill = "") +
+  scale_fill_brewer(palette = "Dark2") +
+  scale_y_continuous(labels = label_dollar()) +  # Format y-axis as dollar amounts
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  
+        axis.text.y = element_text(size = 14),  
+        axis.title.x = element_text(size = 16),  
+        axis.title.y = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+ruckus_plot
+
+
+```
+
+### Column
+
+```{r}
+#| title: Age and Dollar Breakdown
+
+# Create a new categorical var of age groupings
+backlog <- backlog |> 
+  mutate(age_cat = cut(age_bizdays,
+                           breaks = c(-Inf, 14, 29, Inf),  
+                           labels = c("0-14", "15-29", "30+"),  
+                           right = TRUE))  
+backlog <- backlog |> 
+  mutate(age_cat = factor(age_cat, levels = c("0-14", "15-29", "30+")))
+
+summary_data <- backlog  |> 
+  group_by(age_cat, `Document Number`)  |> 
+  summarise(total_unbilled = sum(`Unbilled Amount`, na.rm = TRUE))  |> 
+  ungroup() |> 
+  group_by(age_cat)  |> 
+  summarise(total_unbilled = sum(total_unbilled, na.rm = TRUE),
+            total_orders = n_distinct(`Document Number`))  |> 
+  arrange(age_cat)
+
+
+ggplot(summary_data, aes(x = age_cat, y = total_unbilled, fill = age_cat)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste("Orders:", total_orders)), 
+            vjust = 1.5, 
+            size = 5, 
+            color = "white", 
+            fontface = "bold") +
+  labs(title = "Total Unbilled Amounts by Age",
+       x = "",
+       y = "",
+       fill = "Age in Business Days") +
+  # scale_fill_brewer(palette = "Paired") +
+  scale_fill_manual(values = wes_palette("GrandBudapest2", n = 3)) +
+  scale_y_continuous(labels = label_dollar()) +  # Format y-axis as dollar amounts
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 18),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 14))
+
+
+```
+
+# August
+
+
+# September
+
+# Q2 At a Glance
+
+
+
